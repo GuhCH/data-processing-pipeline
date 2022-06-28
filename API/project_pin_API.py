@@ -6,7 +6,9 @@ from kafka import KafkaProducer
 
 app = FastAPI()
 
-
+producer = KafkaProducer(bootstrap_servers='localhost:9092',
+                        client_id='Pinterest data producer',
+                        value_serializer=lambda message: dumps(message).encode("ascii"))
 
 class Data(BaseModel):
     category: str
@@ -25,6 +27,7 @@ class Data(BaseModel):
 @app.post("/pin/")
 def get_db_row(item: Data):
     data = dict(item)
+    producer.send(topic='PinterestData', value=data)
     return item
 
 

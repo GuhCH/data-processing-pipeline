@@ -35,9 +35,9 @@ def run_infinite_post_data_loop():
         engine = new_connector.create_db_connector()
         selected_row = engine.execute(f"SELECT * FROM pinterest_data LIMIT {random_row}, 1")
         for row in selected_row:
-	    result = dict(row)
-        requests.post("http://localhost:8000/pin/", json=result)
-        print(result)
+            result = dict(row)
+            requests.post("http://localhost:8000/pin/", json=result)
+            print(result)
 
 
 if __name__ == "__main__":
