@@ -19,7 +19,7 @@ os.makedirs(filepath, exist_ok=True)
 for message in batch_consumer:
     filename = str(uuid.uuid4())+'.json'
     with open(filepath+filename, 'w') as f:
-        f.write(json.dumps(message))
+        f.write(json.dumps(message.value))
     response = s3_client.upload_file(filepath+filename, 'pinterest-data-pipeline-project', filename)
     os.remove(filepath+filename)
     

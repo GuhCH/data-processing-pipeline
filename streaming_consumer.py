@@ -10,4 +10,4 @@ streaming_consumer = KafkaConsumer(
 streaming_consumer.subscribe(topics='PinterestData')
 
 for message in streaming_consumer:
-    print(message)
+    print(json.dumps(message.value))
