@@ -8,6 +8,9 @@ import boto3
 import json
 import re
 import pandas
+import os
+
+os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages com.amazonaws:aws-java-sdk-s3:1.12.255,org.apache.hadoop:hadoop-aws:3.3.3,com.datastax.spark:spark-cassandra-connector_2.12:3.2.0 pyspark-shell'
 
 s3r = boto3.resource('s3')
 s3c = boto3.client('s3')
@@ -26,6 +29,7 @@ cfg = (
     .setExecutorEnv(pairs=[("VAR3", "value3"), ("VAR4", "value4")])
     # Setting memory if this setting was not set previously
     .setIfMissing("spark.executor.memory", "1g")
+    .set("spark.sql.catalog.myCatalog", "com.datastax.spark.connector.datasource.CassandraCatalog")
 )
  
 print('Spark session config:')
@@ -34,6 +38,13 @@ print(cfg.toDebugString())
 session = pyspark.sql.SparkSession.builder.config(conf=cfg).getOrCreate()
 
 sc = session.sparkContext
+
+access_key = input('Access key: ')
+secret_key = input('Secret key:')
+hadoopConf = sc._jsc.hadoopConfiguration()
+hadoopConf.set('fs.s3a.access.key', access_key)
+hadoopConf.set('fs.s3a.secret.key', secret_key)
+hadoopConf.set('spark.hadoop.fs.s3a.aws.credentials.provider', 'org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider')
 
 rawSchema = StructType([
     StructField('category', StringType(), True),
@@ -49,40 +60,9 @@ rawSchema = StructType([
     StructField('save_location', StringType(), True)
 ])
 
-cleanedSchema = StructType([
-    StructField('category', StringType(), True),
-    StructField('index', IntegerType(), True),
-    StructField('title', StringType(), True),
-    StructField('description', StringType(), True),
-    StructField('follower_count', StringType(), True),
-    StructField('tag_list', StringType(), True),
-    StructField('is_image_or_video', StringType(), True),
-    StructField('image_src', StringType(), True)
-])
-
-finalSchema = StructType([
-    StructField('category', StringType(), True),
-    StructField('index', IntegerType(), True),
-    StructField('title', StringType(), True),
-    StructField('description', StringType(), True),
-    StructField('follower_count', StringType(), True),
-    StructField('tag_list', ArrayType(StringType()), True),
-    StructField('is_image_or_video', StringType(), True),
-    StructField('image_src', StringType(), True)
-])
-
-def f(taglist):
-    re.split(',',taglist)
-
-emptyRDD = session.sparkContext.emptyRDD()
-df = session.createDataFrame(emptyRDD,cleanedSchema).toPandas()
-
 for file in myBucket.objects.all():
     print(file.key)
-    s3c.download_file(bucket, file.key, 'tmp/tmp.json')
-    df1 = session.read.json('tmp/tmp.json', schema=rawSchema).drop('unique_id','downloaded','save_location').toPandas()
-    df = pandas.concat([df,df1])
-df = session.createDataFrame(df)
-df1 = df.select(split(col('tag_list'),',').alias('tags'),'index').drop('tag_list')
-df.join(df1,['index']).drop('tag_list').cache()
-df.sort('category').show()
+    df = session.read.json('s3a://pinterest-data-pipeline-project/'+file.key)
+    df = df.drop('unique_id','downloaded','save_location') # drop unwanted columns
+    df = df.select('*',split(col('tag_list'),',').alias('tags')).drop('tag_list').show() # convert 'tag_list' strings to lists (using , as delimiter)
+    # df.write.format("org.apache.spark.sql.cassandra").mode('append').options(table="pinterest_data", keyspace="data").save()
