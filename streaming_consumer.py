@@ -3,12 +3,11 @@ import findspark
 findspark.init('/home/guhch/spark/spark-3.3.0-bin-hadoop3/')
 import pyspark
 from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 from pyspark.sql.types import *
-from pyspark.sql.functions import split, col, from_json
 import os
-import multiprocessing
 
-os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0 streaming_consumer.py pyspark-shell'
+os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0,org.postgresql:postgresql:42.4.2 streaming_consumer.py pyspark-shell'
 
 kafka_topic_name = 'PinterestData'
 kafka_bootstrap_servers = 'localhost:9092'
@@ -44,11 +43,27 @@ Schema = StructType([
     StructField('save_location', StringType(), True)
 ])
 
-df = data_df.selectExpr("CAST(value as STRING)",'timestamp')
-df = df.withColumn('value', from_json(df['value'], Schema)).select(col('value.*'),col('timestamp'))
-df = df.drop('unique_id','downloaded','save_location').withColumnRenamed('index','site_index') # drop unwanted columns
-df = df.select('*',split(col('tag_list'),',').alias('tags')).drop('tag_list')
+def foreach_batch_function(df, epoch_id):
+    # selects relevant data and timestamp for each post
+    df = df.selectExpr("CAST(value as STRING)",'timestamp')
+    # cleans data (removes unwanted columns, renames timestamp to time_stamp to avoid clashes with SQL syntax, renames index to site_index for consistency with batch layer)
+    df = df.withColumn('value', F.from_json(df['value'], Schema)).select(F.col('value.*'),F.col('timestamp').alias('time_stamp'))
+    df = df.drop('unique_id','downloaded','save_location').withColumnRenamed('index','site_index')
+    df.write.format('jdbc')\
+        .option('url', 'jdbc:postgresql://localhost:5432/pinterest_streaming')\
+        .option('driver', 'org.postgresql.Driver')\
+        .option('dbtable', 'experimental_data')\
+        .option('user', 'postgres')\
+        .option('password', 'xzxzxzxzx')\
+        .mode('append')\
+        .save()
 
-df.writeStream.outputMode('append').format('console').start().awaitTermination()
+# posts_window = df.groupBy(F.window(df['time_stamp'], '1 minute', '1 minute'), df['category']).count()
+# tag_window = df.groupBy(F.window(df['time_stamp'], '1 minute', '1 minute'), df['category']).count()
 
-df.show(10)
+# print(posts_window)
+# print(tag_window)
+
+data_df.writeStream\
+    .foreachBatch(foreach_batch_function)\
+    .start().awaitTermination()
