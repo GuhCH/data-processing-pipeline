@@ -10,10 +10,22 @@ import re
 import pandas
 import os
 from cassandra.cluster import Cluster
+import logging
 
-os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages com.amazonaws:aws-java-sdk-s3:1.12.255,com.datastax.spark:spark-cassandra-connector_2.12:3.2.0 pyspark-shell'
-clstr=Cluster()
-cass_session=clstr.connect()
+# logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+handler = logging.FileHandler('logs/local_spark_processing.log')
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+try:
+    os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages com.amazonaws:aws-java-sdk-s3:1.12.255,com.datastax.spark:spark-cassandra-connector_2.12:3.2.0 pyspark-shell'
+    clstr=Cluster()
+    cass_session=clstr.connect()
+    logger.info('Spark initialised successfully')
+except Exception as e:
+    logger.error(e)
 
 def process_raw_data(date: str):
     '''
@@ -22,28 +34,30 @@ def process_raw_data(date: str):
     args:
         a date in YYYY-MM-DD format
     '''
+    try:
+        cfg = (
+            pyspark.SparkConf()
+            # Setting the master to run locally and with the maximum amount of cpu coresfor multiprocessing.
+            .setMaster(f"local[{multiprocessing.cpu_count()}]")
+            # Setting application name
+            .setAppName("TestApp")
+            # Setting config value via string
+            .set("spark.eventLog.enabled", False)
+            # Setting environment variables for executors to use
+            .setExecutorEnv(pairs=[("VAR3", "value3"), ("VAR4", "value4")])
+            # Setting memory if this setting was not set previously
+            .setIfMissing("spark.executor.memory", "1g")
+            .set("spark.sql.catalog.myCatalog", "com.datastax.spark.connector.datasource.CassandraCatalog")
+        )
 
-    cfg = (
-        pyspark.SparkConf()
-        # Setting the master to run locally and with the maximum amount of cpu coresfor multiprocessing.
-        .setMaster(f"local[{multiprocessing.cpu_count()}]")
-        # Setting application name
-        .setAppName("TestApp")
-        # Setting config value via string
-        .set("spark.eventLog.enabled", False)
-        # Setting environment variables for executors to use
-        .setExecutorEnv(pairs=[("VAR3", "value3"), ("VAR4", "value4")])
-        # Setting memory if this setting was not set previously
-        .setIfMissing("spark.executor.memory", "1g")
-        .set("spark.sql.catalog.myCatalog", "com.datastax.spark.connector.datasource.CassandraCatalog")
-    )
-    
-    print('Spark session config:')
-    print(cfg.toDebugString())
+        session = pyspark.sql.SparkSession.builder.config(conf=cfg).getOrCreate()
 
-    session = pyspark.sql.SparkSession.builder.config(conf=cfg).getOrCreate()
+        sc = session.sparkContext
 
-    sc = session.sparkContext
+        logger.info('Spark session successfully started')
+
+    except Exception as e:
+        logger.error(e)
 
     keyspace_name = 'data'
     table_name = 'pinterest_data'
@@ -73,11 +87,15 @@ def process_raw_data(date: str):
     ])
 
     for file in os.listdir(f'./data/{date}'):
-        df = session.read.json(f'./data/{date}/{file}', schema=rawSchema) # read file from s3
-        df = df.drop('unique_id','downloaded','save_location').withColumnRenamed('index','site_index') # drop unwanted columns
-        df = df.select('*',split(col('tag_list'),',').alias('tags')).drop('tag_list') # convert 'tag_list' strings to lists (using , as delimiter)
-        df.write.format("org.apache.spark.sql.cassandra").mode('append').options(table=table_name, keyspace=keyspace_name).save() # append row to cassandra table
-        print(f'{file} cleaned and sent to cassandra')
+        try:
+            df = session.read.json(f'./data/{date}/{file}', schema=rawSchema) # read file from s3
+            df = df.drop('unique_id','downloaded','save_location').withColumnRenamed('index','site_index') # drop unwanted columns
+            df = df.select('*',split(col('tag_list'),',').alias('tags')).drop('tag_list') # convert 'tag_list' strings to lists (using , as delimiter)
+            df.write.format("org.apache.spark.sql.cassandra").mode('append').options(table=table_name, keyspace=keyspace_name).save() # append row to cassandra table
+            logger.info(f'{file} cleaned and sent to cassandra')
+        except Exception as e:
+            logger.error(e)
+        
 
 if __name__ == '__main__':
     process_raw_data('2022-07-15')
